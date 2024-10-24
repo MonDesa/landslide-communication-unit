@@ -1,0 +1,29 @@
+{
+    "CommUnitID": "1",
+    "wifi": {
+        "ssid": "your_wifi_ssid",
+        "password": "your_wifi_password"
+    },
+    "mqtt": {
+        "server": "your_mqtt_server",
+        "port": 1883
+    },
+    "modem": {
+        "apn": "your_apn",
+        "gprsUser": "",
+        "gprsPass": "",
+        "server": "your_server.com",
+        "port": 80
+    },
+    "admin": {
+        "username": "admin",
+        "password": "admin123"
+    },
+    "aws": {
+        "endpoint": "your-aws-endpoint.amazonaws.com",
+        "thingName": "YourThingName",
+        "certificate": "/certs/device-certificate.pem.crt",
+        "privateKey": "/certs/private.pem.key",
+        "caCertificate": "/certs/AmazonRootCA1.pem"
+    }
+}
