@@ -1,87 +1,139 @@
+#include <Arduino.h>
+#include <WebServer.h>
 #include <WiFi.h>
-#include <PubSubClient.h>
-#include "config.h"
 
-const int mqtt_port = 1883;
+#include "AWSIoTManager.h"
+#include "ConfigManager.h"
+#include "HealthMonitor.h"
+#include "LoRaProtocol.h"
+#include "LocalBrokerManager.h"
+#include "ModemProtocol.h"
+#include "ProtocolBase.h"
+#include "ProtocolManager.h"
+#include "WiFiProtocol.h"
 
-const char* mqtt_topic_subscribe = "/Data/To/Unit/1"; 
-const char* mqtt_topic_publish = "/Data/From/Unit/1";
+const char *aws_endpoint = "aws-endpoint.amazonaws.com";
+const char *aws_thingName = "ThingName";
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+const char *ca_cert = "-----BEGIN CERTIFICATE-----\n"
+                      "YOUR_CA_CERTIFICATE_HERE\n"
+                      "-----END CERTIFICATE-----\n";
 
-void setup_wifi() {
-  delay(10);
-  Serial.println("Connecting to WiFi...");
-  WiFi.begin(ssid, password);
+const char *client_cert = "-----BEGIN CERTIFICATE-----\n"
+                          "YOUR_CLIENT_CERTIFICATE_HERE\n"
+                          "-----END CERTIFICATE-----\n";
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
+const char *client_key = "-----BEGIN RSA PRIVATE KEY-----\n"
+                         "YOUR_PRIVATE_KEY_HERE\n"
+                         "-----END RSA PRIVATE KEY-----\n";
 
-  Serial.println("WiFi connected");
-}
+ConfigManager configManager;
+AWSIoTManager awsIoT(aws_endpoint, aws_thingName, ca_cert, client_cert, client_key);
+ProtocolManager protocolManager;
+HealthMonitor *healthMonitor = nullptr;
+WebServer server(80);
 
-void connectToMQTT() {
-  while (!client.connected()) {
-    Serial.println("Connecting to MQTT...");
-    if (client.connect("ESP32Client", NULL, NULL, mqtt_topic_publish, 1, false, "Offline")) {
-      Serial.println("Connected to MQTT broker");
-      client.subscribe(mqtt_topic_subscribe, 1);
-    } else {
-      Serial.print("Failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
-      delay(5000);
+unsigned long lastConfigFetch = 0;
+const unsigned long configFetchInterval = 3600000; // 1 hour
+unsigned long lastDataPost = 0;
+const unsigned long dataPostInterval = 86400000; // 24 hours
+unsigned long lastMetricsTime = 0;
+const unsigned long metricsInterval = 10000; // 10 seconds
+
+void handleGetConfig() {
+    if (!server.authenticate(configManager.adminUsername.c_str(), configManager.adminPassword.c_str())) {
+        return server.requestAuthentication();
     }
-  }
+    // TODO(SAMUEL): Implement the logic to send the config
 }
 
-void RelayData(const String& message) {
-  Serial.println("Relaying data to outside world...");
-  // TODO(samuel): Implement the whole logic behind data transmission to external world
+void handlePostConfig() {
+    if (!server.authenticate(configManager.adminUsername.c_str(), configManager.adminPassword.c_str())) {
+        return server.requestAuthentication();
+    }
+    // TODO(SAMUEL): Implement the logic to receive and save the config
 }
 
-void ToCoord(const String& data) {
-  Serial.println("Sending data to coordinator...");
-  client.publish(mqtt_topic_publish, data.c_str(), true);
-}
+void handleNotFound() { server.send(404, "application/json", "{\"status\":\"Not Found\"}"); }
 
-void callback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("Message arrived on topic: ");
-  Serial.print(topic);
-  Serial.print(". Message: ");
-  
-  String message;
-  for (int i = 0; i < length; i++) {
-    message += (char)payload[i];
-  }
-  Serial.println(message);
+void postBrokerDataToAWS() {
+    Serial.println("Posting all data from local MQTT broker to AWS IoT Core...");
 
-  RelayData(message);
+    LocalBrokerManager localBroker(configManager.localBrokerAddress, configManager.localBrokerPort);
+    if (localBroker.connect()) {
+        JsonDocument aggregatedData;
+        localBroker.collectData(aggregatedData);
+        localBroker.disconnect();
 
-  ToCoord("Processed data: " + message);
+        String aggregatedDataString;
+        serializeJson(aggregatedData, aggregatedDataString);
+
+        String topic = "communication_unit/" + configManager.CommUnitID + "/broker_data";
+        if (awsIoT.publish(topic, aggregatedDataString)) {
+            Serial.println("Aggregated broker data published to AWS IoT Core");
+        } else {
+            Serial.println("Failed to publish aggregated broker data");
+        }
+    }
 }
 
 void setup() {
-  Serial.begin(115200);
+    Serial.begin(115200);
 
-  setup_wifi();
+    if (!configManager.begin()) {
+        Serial.println("Configuration Manager failed to start");
+        return;
+    }
 
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
+    Serial.print("Communication Unit ID: ");
+    Serial.println(configManager.CommUnitID);
 
-  connectToMQTT();
+    protocolManager.registerProtocol(new WiFiProtocol(configManager.ssid, configManager.password));
 
-  client.subscribe(mqtt_topic_subscribe, 1);
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Failed to connect to Wi-Fi via WiFiProtocol");
+        // TODO(SAMUEL): Handle failure
+        return;
+    }
+
+    // TODO(SAMUEL): Implement fetchConfiguration() if required, and fetch remote configuration if needed
+
+    awsIoT.begin();
+
+    while (!awsIoT.connect()) {
+        // TODO(SAMUEL): Retry logic is handled in connect()
+    }
+
+    server.on("/config", HTTP_GET, handleGetConfig);
+    server.on("/config", HTTP_POST, handlePostConfig);
+    server.onNotFound(handleNotFound);
+
+    server.begin();
+    Serial.println("HTTP server started");
+
+    protocolManager.registerProtocol(new LoRaProtocol());
+    protocolManager.registerProtocol(new ModemProtocol(configManager.apn, configManager.gprsUser, configManager.gprsPass, configManager.modemServer, configManager.modemPort));
+
+    healthMonitor = new HealthMonitor(awsIoT, configManager.CommUnitID);
+
+    healthMonitor->publishMetrics();
 }
 
 void loop() {
-  if (!client.connected()) {
-    connectToMQTT();
-  }
-  client.loop();
+    awsIoT.loop();
+    server.handleClient();
 
-  delay(1000);
+    // Should I fetch remote configuration periodically?
+
+    if (millis() - lastMetricsTime > metricsInterval) {
+        healthMonitor->publishMetrics();
+        lastMetricsTime = millis();
+    }
+
+    if (millis() - lastDataPost > dataPostInterval) {
+        postBrokerDataToAWS();
+        lastDataPost = millis();
+    }
+
+    delay(10);
 }
