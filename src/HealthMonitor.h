@@ -1,16 +1,16 @@
 #ifndef HEALTH_MONITOR_H
 #define HEALTH_MONITOR_H
 
-#include "AWSIoTManager.h"
+#include "ExternalBrokerManager.h"
 #include <Arduino.h>
 
 class HealthMonitor {
   public:
-    HealthMonitor(AWSIoTManager &awsIoT, const String &commUnitID);
+    HealthMonitor(ExternalBrokerManager &externalBroker, const String &commUnitID);
     void publishMetrics();
 
   private:
-    AWSIoTManager &awsIoT;
+    ExternalBrokerManager &externalBroker;
     String commUnitID;
 };
 

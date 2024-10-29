@@ -2,8 +2,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
-#include "AWSIoTManager.h"
 #include "ConfigManager.h"
+#include "ExternalBrokerManager.h"
 #include "HealthMonitor.h"
 #include "LoRaProtocol.h"
 #include "LocalBrokerManager.h"
@@ -12,23 +12,8 @@
 #include "ProtocolManager.h"
 #include "WiFiProtocol.h"
 
-const char *aws_endpoint = "aws-endpoint.amazonaws.com";
-const char *aws_thingName = "ThingName";
-
-const char *ca_cert = "-----BEGIN CERTIFICATE-----\n"
-                      "YOUR_CA_CERTIFICATE_HERE\n"
-                      "-----END CERTIFICATE-----\n";
-
-const char *client_cert = "-----BEGIN CERTIFICATE-----\n"
-                          "YOUR_CLIENT_CERTIFICATE_HERE\n"
-                          "-----END CERTIFICATE-----\n";
-
-const char *client_key = "-----BEGIN RSA PRIVATE KEY-----\n"
-                         "YOUR_PRIVATE_KEY_HERE\n"
-                         "-----END RSA PRIVATE KEY-----\n";
-
 ConfigManager configManager;
-AWSIoTManager awsIoT(aws_endpoint, aws_thingName, ca_cert, client_cert, client_key);
+ExternalBrokerManager externalBroker("", 1883); // Placeholder, will set in setup()
 ProtocolManager protocolManager;
 HealthMonitor *healthMonitor = nullptr;
 WebServer server(80);
@@ -56,12 +41,12 @@ void handlePostConfig() {
 
 void handleNotFound() { server.send(404, "application/json", "{\"status\":\"Not Found\"}"); }
 
-void postBrokerDataToAWS() {
-    Serial.println("Posting all data from local MQTT broker to AWS IoT Core...");
+void postBrokerDataToExternalBroker() {
+    Serial.println("Posting all data from local MQTT broker to External Broker...");
 
     LocalBrokerManager localBroker(configManager.localBrokerAddress, configManager.localBrokerPort);
     if (localBroker.connect()) {
-        JsonDocument aggregatedData;
+        DynamicJsonDocument aggregatedData(8192); // Adjust size as needed
         localBroker.collectData(aggregatedData);
         localBroker.disconnect();
 
@@ -69,8 +54,8 @@ void postBrokerDataToAWS() {
         serializeJson(aggregatedData, aggregatedDataString);
 
         String topic = "communication_unit/" + configManager.CommUnitID + "/broker_data";
-        if (awsIoT.publish(topic, aggregatedDataString)) {
-            Serial.println("Aggregated broker data published to AWS IoT Core");
+        if (externalBroker.publish(topic, aggregatedDataString)) {
+            Serial.println("Aggregated broker data published to External Broker");
         } else {
             Serial.println("Failed to publish aggregated broker data");
         }
@@ -96,11 +81,10 @@ void setup() {
         return;
     }
 
-    // TODO(SAMUEL): Implement fetchConfiguration() if required, and fetch remote configuration if needed
+    externalBroker = ExternalBrokerManager(configManager.externalBrokerAddress, configManager.externalBrokerPort);
+    externalBroker.begin();
 
-    awsIoT.begin();
-
-    while (!awsIoT.connect()) {
+    while (!externalBroker.connect()) {
         // TODO(SAMUEL): Retry logic is handled in connect()
     }
 
@@ -114,16 +98,14 @@ void setup() {
     protocolManager.registerProtocol(new LoRaProtocol());
     protocolManager.registerProtocol(new ModemProtocol(configManager.apn, configManager.gprsUser, configManager.gprsPass, configManager.modemServer, configManager.modemPort));
 
-    healthMonitor = new HealthMonitor(awsIoT, configManager.CommUnitID);
+    healthMonitor = new HealthMonitor(externalBroker, configManager.CommUnitID);
 
     healthMonitor->publishMetrics();
 }
 
 void loop() {
-    awsIoT.loop();
+    externalBroker.loop();
     server.handleClient();
-
-    // Should I fetch remote configuration periodically?
 
     if (millis() - lastMetricsTime > metricsInterval) {
         healthMonitor->publishMetrics();
@@ -131,7 +113,7 @@ void loop() {
     }
 
     if (millis() - lastDataPost > dataPostInterval) {
-        postBrokerDataToAWS();
+        postBrokerDataToExternalBroker();
         lastDataPost = millis();
     }
 

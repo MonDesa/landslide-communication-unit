@@ -23,6 +23,8 @@ class ConfigManager {
     String adminPassword;
     String localBrokerAddress;
     int localBrokerPort;
+    String externalBrokerAddress;
+    int externalBrokerPort;
 
   private:
     const char *configFilePath = "/config.json";

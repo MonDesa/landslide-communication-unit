@@ -40,6 +40,8 @@ void ConfigManager::readConfig() {
     adminPassword = doc["admin"]["password"].as<String>();
     localBrokerAddress = doc["mqtt"]["localBrokerAddress"].as<String>();
     localBrokerPort = doc["mqtt"]["localBrokerPort"] | 1883;
+    externalBrokerAddress = doc["externalBroker"]["address"].as<String>();
+    externalBrokerPort = doc["externalBroker"]["port"] | 1883;
 }
 
 void ConfigManager::saveConfig(const String &jsonString) {

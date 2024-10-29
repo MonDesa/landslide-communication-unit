@@ -5,7 +5,11 @@
         "password": "your_wifi_password"
     },
     "mqtt": {
-        "server": "your_mqtt_server",
+        "localBrokerAddress": "raspberry_pi_ip_address",
+        "localBrokerPort": 1883
+    },
+    "externalBroker": {
+        "address": "your_local_computer_ip_address",
         "port": 1883
     },
     "modem": {
@@ -19,11 +23,5 @@
         "username": "admin",
         "password": "admin123"
     },
-    "aws": {
-        "endpoint": "your-aws-endpoint.amazonaws.com",
-        "thingName": "YourThingName",
-        "certificate": "/certs/device-certificate.pem.crt",
-        "privateKey": "/certs/private.pem.key",
-        "caCertificate": "/certs/AmazonRootCA1.pem"
-    }
+    "configServerURL": "http://your_server_ip:5000"
 }
