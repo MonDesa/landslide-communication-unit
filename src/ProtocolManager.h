@@ -10,6 +10,8 @@ class ProtocolManager {
     ~ProtocolManager();
     void registerProtocol(ProtocolBase *protocol);
     const std::vector<ProtocolBase *> &getProtocols() const;
+    void loop();            // Added loop method
+    void clearProtocols();  // Added clearProtocols method
 
   private:
     std::vector<ProtocolBase *> protocols;

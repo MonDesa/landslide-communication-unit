@@ -7,16 +7,23 @@
 #define RST_PIN 14 // TODO(SAMUEL): Adjust according to wiring
 #define IRQ_PIN 26 // TODO(SAMUEL): Adjust according to wiring
 
+
 class LoRaProtocol : public ProtocolBase {
   public:
     bool begin() override {
         LoRa.setPins(CS_PIN, RST_PIN, IRQ_PIN);
-        bool success = LoRa.begin(915E6); // Lora frequency
+        bool success = LoRa.begin(915E6); // LoRa frequency
+        if (success) {
+            Serial.println("LoRa initialized successfully");
+        } else {
+            Serial.println("Failed to initialize LoRa");
+        }
         return success;
     }
 
     bool isAvailable() override {
-        return true; // TODO(SAMUEL): Implement availability check
+        // Implement availability check if needed
+        return true;
     }
 
     void sendData(const String &data) override {
@@ -24,6 +31,10 @@ class LoRaProtocol : public ProtocolBase {
         LoRa.beginPacket();
         LoRa.print(data);
         LoRa.endPacket();
+    }
+
+    void loop() override {
+        // Implement any periodic tasks for LoRa if needed
     }
 
     String getName() override { return "LoRa"; }

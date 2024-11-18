@@ -9,7 +9,7 @@ class ConfigManager {
   public:
     bool begin();
     void readConfig();
-    void saveConfig(const String &jsonString);
+    bool saveConfig(const String &jsonString);
 
     String CommUnitID;
     String ssid;
@@ -25,8 +25,10 @@ class ConfigManager {
     int localBrokerPort;
     String externalBrokerAddress;
     int externalBrokerPort;
+    String configServerURL;
+    bool enableLoRa;
+    bool enableModem;
 
-  private:
     const char *configFilePath = "/config.json";
 };
 

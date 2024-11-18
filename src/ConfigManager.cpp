@@ -21,7 +21,7 @@ void ConfigManager::readConfig() {
     buf[size] = '\0';
     file.close();
 
-    DynamicJsonDocument doc(4096);
+    StaticJsonDocument<1024> doc; // Specify an appropriate size
     auto error = deserializeJson(doc, buf.get());
     if (error) {
         Serial.println("Failed to parse config file");
@@ -35,21 +35,26 @@ void ConfigManager::readConfig() {
     gprsUser = doc["modem"]["gprsUser"].as<String>();
     gprsPass = doc["modem"]["gprsPass"].as<String>();
     modemServer = doc["modem"]["server"].as<String>();
-    modemPort = doc["modem"]["port"];
+    modemPort = doc["modem"]["port"] | 80;
     adminUsername = doc["admin"]["username"].as<String>();
     adminPassword = doc["admin"]["password"].as<String>();
     localBrokerAddress = doc["mqtt"]["localBrokerAddress"].as<String>();
     localBrokerPort = doc["mqtt"]["localBrokerPort"] | 1883;
     externalBrokerAddress = doc["externalBroker"]["address"].as<String>();
     externalBrokerPort = doc["externalBroker"]["port"] | 1883;
+    configServerURL = doc["configServerURL"].as<String>();
+
+    enableLoRa = doc["enableLoRa"] | false;
+    enableModem = doc["enableModem"] | false;
 }
 
-void ConfigManager::saveConfig(const String &jsonString) {
+bool ConfigManager::saveConfig(const String &jsonString) {
     File file = SPIFFS.open(configFilePath, "w");
     if (!file) {
         Serial.println("Failed to open config file for writing");
-        return;
+        return false;
     }
     file.print(jsonString);
     file.close();
+    return true;
 }

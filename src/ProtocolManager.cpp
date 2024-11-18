@@ -1,9 +1,7 @@
 #include "ProtocolManager.h"
 
 ProtocolManager::~ProtocolManager() {
-    for (ProtocolBase *protocol : protocols) {
-        delete protocol;
-    }
+    clearProtocols();
 }
 
 void ProtocolManager::registerProtocol(ProtocolBase *protocol) {
@@ -22,3 +20,16 @@ void ProtocolManager::registerProtocol(ProtocolBase *protocol) {
 }
 
 const std::vector<ProtocolBase *> &ProtocolManager::getProtocols() const { return protocols; }
+
+void ProtocolManager::loop() {
+    for (ProtocolBase *protocol : protocols) {
+        protocol->loop(); // Call loop on each protocol
+    }
+}
+
+void ProtocolManager::clearProtocols() {
+    for (ProtocolBase *protocol : protocols) {
+        delete protocol;
+    }
+    protocols.clear();
+}

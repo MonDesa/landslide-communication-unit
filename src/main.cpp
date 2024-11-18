@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include <WebServer.h>
 #include <WiFi.h>
+#include <PubSubClient.h> // MQTT library
 
 #include "ConfigManager.h"
 #include "ExternalBrokerManager.h"
@@ -12,41 +12,226 @@
 #include "ProtocolManager.h"
 #include "WiFiProtocol.h"
 
+// Wi-Fi and MQTT clients
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
 ConfigManager configManager;
-ExternalBrokerManager externalBroker("", 1883); // Placeholder, will set in setup()
+ExternalBrokerManager externalBroker("", 1883); // placeholder, will set in setup()
 ProtocolManager protocolManager;
 HealthMonitor *healthMonitor = nullptr;
-WebServer server(80);
 
-unsigned long lastConfigFetch = 0;
-const unsigned long configFetchInterval = 3600000; // 1 hour
+// Timing variables
 unsigned long lastDataPost = 0;
 const unsigned long dataPostInterval = 86400000; // 24 hours
 unsigned long lastMetricsTime = 0;
 const unsigned long metricsInterval = 10000; // 10 seconds
 
-void handleGetConfig() {
-    if (!server.authenticate(configManager.adminUsername.c_str(), configManager.adminPassword.c_str())) {
-        return server.requestAuthentication();
+void reinitializeServices() {
+    // Reinitialize the external broker if needed
+    externalBroker = ExternalBrokerManager(configManager.externalBrokerAddress, configManager.externalBrokerPort);
+    externalBroker.begin();
+
+    while (!externalBroker.connect()) {
+        // Retry logic is handled in connect()
     }
-    // TODO(SAMUEL): Implement the logic to send the config
+
+    // Reinitialize Wi-Fi if credentials have changed
+    if (WiFi.SSID() != configManager.ssid) {
+        Serial.println("Wi-Fi credentials have changed. Reconnecting...");
+
+        WiFi.disconnect();
+        delay(1000);
+
+        WiFi.begin(configManager.ssid.c_str(), configManager.password.c_str());
+
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(500);
+            Serial.print(".");
+        }
+        Serial.println("\nConnected to Wi-Fi");
+    }
+
+    // Reinitialize other protocols if necessary
+    protocolManager.clearProtocols();
+    protocolManager.registerProtocol(new WiFiProtocol(configManager.ssid, configManager.password));
+    // Register other protocols based on the updated configuration
+    if (configManager.enableLoRa) {
+        protocolManager.registerProtocol(new LoRaProtocol());
+    }
+    if (configManager.enableModem) {
+        protocolManager.registerProtocol(new ModemProtocol(
+            configManager.apn,
+            configManager.gprsUser,
+            configManager.gprsPass,
+            configManager.modemServer,
+            configManager.modemPort
+        ));
+    }
+
+    // Re-subscribe to MQTT topics
+    String configTopic = "comm_unit/" + configManager.CommUnitID + "/config";
+    mqttClient.subscribe(configTopic.c_str());
 }
 
-void handlePostConfig() {
-    if (!server.authenticate(configManager.adminUsername.c_str(), configManager.adminPassword.c_str())) {
-        return server.requestAuthentication();
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    String message;
+    for (unsigned int i = 0; i < length; i++) {
+        message += (char)payload[i];
     }
-    // TODO(SAMUEL): Implement the logic to receive and save the config
+
+    Serial.print("Received message on topic: ");
+    Serial.println(topic);
+    Serial.print("Message: ");
+    Serial.println(message);
+
+    // Check if the message is on the configuration topic
+    String configTopic = "comm_unit/" + configManager.CommUnitID + "/config";
+    if (String(topic) == configTopic) {
+        // Update configuration
+        if (configManager.saveConfig(message)) {
+            Serial.println("Configuration updated successfully.");
+
+            configManager.readConfig();
+
+            reinitializeServices();
+
+            // Publish status
+            String statusTopic = "comm_unit/" + configManager.CommUnitID + "/config/status";
+            String statusMessage = "{\"status\":\"success\"}";
+            mqttClient.publish(statusTopic.c_str(), statusMessage.c_str());
+        } else {
+            Serial.println("Failed to save configuration.");
+
+            // Publish status
+            String statusTopic = "comm_unit/" + configManager.CommUnitID + "/config/status";
+            String statusMessage = "{\"status\":\"failure\"}";
+            mqttClient.publish(statusTopic.c_str(), statusMessage.c_str());
+        }
+    }
 }
 
-void handleNotFound() { server.send(404, "application/json", "{\"status\":\"Not Found\"}"); }
+void setup() {
+    Serial.begin(115200);
+
+    if (!configManager.begin()) {
+        Serial.println("Configuration Manager failed to start");
+        return;
+    }
+
+    // Connect to Wi-Fi
+    WiFi.begin(configManager.ssid.c_str(), configManager.password.c_str());
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nConnected to Wi-Fi");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+
+    // Initialize MQTT client
+    mqttClient.setServer(configManager.externalBrokerAddress.c_str(), configManager.externalBrokerPort);
+    mqttClient.setCallback(mqttCallback);
+
+    // Connect to MQTT broker
+    while (!mqttClient.connected()) {
+        Serial.print("Connecting to MQTT broker...");
+        if (mqttClient.connect(configManager.CommUnitID.c_str())) {
+            Serial.println("connected");
+
+            // Subscribe to the config topic
+            String configTopic = "comm_unit/" + configManager.CommUnitID + "/config";
+            mqttClient.subscribe(configTopic.c_str());
+            Serial.print("Subscribed to topic: ");
+            Serial.println(configTopic);
+        } else {
+            Serial.print("failed, rc=");
+            Serial.print(mqttClient.state());
+            Serial.println(" trying again in 5 seconds");
+            delay(5000);
+        }
+    }
+
+    protocolManager.registerProtocol(new WiFiProtocol(configManager.ssid, configManager.password));
+
+    if (configManager.enableLoRa) {
+        protocolManager.registerProtocol(new LoRaProtocol());
+    }
+
+    if (configManager.enableModem) {
+        protocolManager.registerProtocol(new ModemProtocol(
+            configManager.apn,
+            configManager.gprsUser,
+            configManager.gprsPass,
+            configManager.modemServer,
+            configManager.modemPort
+        ));
+    }
+
+    // Initialize External Broker Manager
+    externalBroker = ExternalBrokerManager(configManager.externalBrokerAddress, configManager.externalBrokerPort);
+    externalBroker.begin();
+
+    while (!externalBroker.connect()) {
+        // Retry logic is handled in connect()
+    }
+
+    // Initialize Health Monitor
+    healthMonitor = new HealthMonitor(externalBroker, configManager.CommUnitID);
+    healthMonitor->publishMetrics();
+
+    Serial.println("Setup completed");
+}
+
+void loop() {
+    if (!mqttClient.connected()) {
+        while (!mqttClient.connected()) {
+            Serial.print("Reconnecting to MQTT broker...");
+            if (mqttClient.connect(configManager.CommUnitID.c_str())) {
+                Serial.println("connected");
+                String configTopic = "comm_unit/" + configManager.CommUnitID + "/config";
+                mqttClient.subscribe(configTopic.c_str());
+                Serial.print("Subscribed to topic: ");
+                Serial.println(configTopic);
+            } else {
+                Serial.print("failed, rc=");
+                Serial.print(mqttClient.state());
+                Serial.println(" trying again in 5 seconds");
+                delay(5000);
+            }
+        }
+    }
+
+    mqttClient.loop();
+
+    // Handle external broker
+    externalBroker.loop();
+
+    // Handle protocols
+    protocolManager.loop();
+
+    // Publish health metrics periodically
+    if (millis() - lastMetricsTime > metricsInterval) {
+        healthMonitor->publishMetrics();
+        lastMetricsTime = millis();
+    }
+
+    // Post data from local broker to external broker periodically
+    if (millis() - lastDataPost > dataPostInterval) {
+        postBrokerDataToExternalBroker();
+        lastDataPost = millis();
+    }
+
+    delay(10);
+}
 
 void postBrokerDataToExternalBroker() {
     Serial.println("Posting all data from local MQTT broker to External Broker...");
 
     LocalBrokerManager localBroker(configManager.localBrokerAddress, configManager.localBrokerPort);
     if (localBroker.connect()) {
-        DynamicJsonDocument aggregatedData(8192); // Adjust size as needed
+        // Collect data from the local broker
+        DynamicJsonDocument aggregatedData(2048);
         localBroker.collectData(aggregatedData);
         localBroker.disconnect();
 
@@ -60,62 +245,4 @@ void postBrokerDataToExternalBroker() {
             Serial.println("Failed to publish aggregated broker data");
         }
     }
-}
-
-void setup() {
-    Serial.begin(115200);
-
-    if (!configManager.begin()) {
-        Serial.println("Configuration Manager failed to start");
-        return;
-    }
-
-    Serial.print("Communication Unit ID: ");
-    Serial.println(configManager.CommUnitID);
-
-    protocolManager.registerProtocol(new WiFiProtocol(configManager.ssid, configManager.password));
-
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Failed to connect to Wi-Fi via WiFiProtocol");
-        // TODO(SAMUEL): Handle failure
-        return;
-    }
-
-    externalBroker = ExternalBrokerManager(configManager.externalBrokerAddress, configManager.externalBrokerPort);
-    externalBroker.begin();
-
-    while (!externalBroker.connect()) {
-        // TODO(SAMUEL): Retry logic is handled in connect()
-    }
-
-    server.on("/config", HTTP_GET, handleGetConfig);
-    server.on("/config", HTTP_POST, handlePostConfig);
-    server.onNotFound(handleNotFound);
-
-    server.begin();
-    Serial.println("HTTP server started");
-
-    protocolManager.registerProtocol(new LoRaProtocol());
-    protocolManager.registerProtocol(new ModemProtocol(configManager.apn, configManager.gprsUser, configManager.gprsPass, configManager.modemServer, configManager.modemPort));
-
-    healthMonitor = new HealthMonitor(externalBroker, configManager.CommUnitID);
-
-    healthMonitor->publishMetrics();
-}
-
-void loop() {
-    externalBroker.loop();
-    server.handleClient();
-
-    if (millis() - lastMetricsTime > metricsInterval) {
-        healthMonitor->publishMetrics();
-        lastMetricsTime = millis();
-    }
-
-    if (millis() - lastDataPost > dataPostInterval) {
-        postBrokerDataToExternalBroker();
-        lastDataPost = millis();
-    }
-
-    delay(10);
 }

@@ -12,11 +12,12 @@
 #define MODEM_TX 17 // TODO(SAMUEL): Adjust according to wiring
 
 // TODO(SAMUEL): Define the serial for communication with the modem
-HardwareSerial SerialAT(1); // Use UART1
+static HardwareSerial SerialAT(1); // Use UART1
 
 class ModemProtocol : public ProtocolBase {
   public:
-    ModemProtocol(const String &apn, const String &gprsUser, const String &gprsPass, const String &server, int port) : modem(SerialAT), apn_(apn), gprsUser_(gprsUser), gprsPass_(gprsPass), server_(server), port_(port) {}
+    ModemProtocol(const String &apn, const String &gprsUser, const String &gprsPass, const String &server, int port)
+        : modem(SerialAT), apn_(apn), gprsUser_(gprsUser), gprsPass_(gprsPass), server_(server), port_(port) {}
 
     bool begin() override {
         SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
@@ -36,7 +37,9 @@ class ModemProtocol : public ProtocolBase {
         return true;
     }
 
-    bool isAvailable() override { return modem.isNetworkConnected(); }
+    bool isAvailable() override {
+        return modem.isNetworkConnected();
+    }
 
     void sendData(const String &data) override {
         Serial.println("Sending data over modem: " + data);
@@ -59,7 +62,30 @@ class ModemProtocol : public ProtocolBase {
         client.stop();
     }
 
-    String getName() override { return "Modem"; }
+    void loop() override {
+        // Implement any periodic tasks required by the modem
+        // For example, you can check network status or manage reconnections
+        if (!modem.isNetworkConnected()) {
+            Serial.println("Modem network disconnected, attempting to reconnect...");
+            if (!modem.restart()) {
+                Serial.println("Failed to restart modem");
+                return;
+            }
+            if (!modem.waitForNetwork()) {
+                Serial.println("Failed to reconnect to network");
+                return;
+            }
+            if (!modem.gprsConnect(apn_.c_str(), gprsUser_.c_str(), gprsPass_.c_str())) {
+                Serial.println("Failed to reconnect to GPRS");
+            } else {
+                Serial.println("Reconnected to GPRS");
+            }
+        }
+    }
+
+    String getName() override {
+        return "Modem";
+    }
 
   private:
     TinyGsm modem;

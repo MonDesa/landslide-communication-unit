@@ -32,6 +32,23 @@ class WiFiProtocol : public ProtocolBase {
     void sendData(const String &data) override {
         Serial.println("Sending data over Wi-Fi: " + data);
         // TODO(SAMUEL): Implement data transmission over Wi-Fi (e.g., HTTP POST)
+        HTTPClient http;
+        http.begin("http://your_server_address/data");
+        http.addHeader("Content-Type", "application/json");
+        int httpCode = http.POST(data);
+        if (httpCode > 0) {
+            Serial.printf("HTTP POST code: %d\n", httpCode);
+        } else {
+            Serial.printf("HTTP POST failed, error: %s\n", http.errorToString(httpCode).c_str());
+        }
+        http.end();
+    }
+
+    void loop() override {
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("Wi-Fi disconnected, attempting to reconnect...");
+            WiFi.reconnect();
+        }
     }
 
     String getName() override { return "WiFi"; }
